@@ -1,0 +1,8 @@
+{
+  "name": "H2 Brasil Distribuidora",
+  "description": "Sistema robusto de roteirização e gestão logística para Itajaí-SC, com otimização de rotas em tempo real, integração AI e gestão de entregas.",
+  "requestFramePermissions": [
+    "geolocation",
+    "microphone"
+  ]
+}
