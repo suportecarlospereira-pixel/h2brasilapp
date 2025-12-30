@@ -3,7 +3,6 @@ import { getDatabase, ref, set, update, onValue, onDisconnect, serverTimestamp }
 import { Driver, DeliveryRoute, LocationPoint, UserRole } from '../types';
 
 // CONFIGURAÇÃO REAL DO FIREBASE
-// Substitua pelas chaves de produção da H2 Brasil
 const firebaseConfig = {
   apiKey: "AIzaSyB1w2ZU2S9u7WG41DWf9utYwpOUlfAYLvk",
   authDomain: "h2app-70d40.firebaseapp.com",
@@ -21,19 +20,24 @@ const database = getDatabase(app);
 class DBService {
   private drivers: Driver[] = [];
   private routes: DeliveryRoute[] = [];
-  private offlineQueue: Array<{ path: string; data: any; method: 'set' | 'update' }> = [];
+  // Inicializa lendo a fila do disco para não perder dados se fechar o app
+  private offlineQueue: Array<{ path: string; data: any; method: 'set' | 'update' }> = 
+    JSON.parse(localStorage.getItem('h2_offline_queue') || '[]');
   private isOnline: boolean = navigator.onLine;
 
   constructor() {
     this.initListeners();
     this.handleConnectionState();
     
-    // Listeners nativos do navegador para internet
     window.addEventListener('online', () => { this.isOnline = true; this.processOfflineQueue(); });
     window.addEventListener('offline', () => { this.isOnline = false; });
   }
 
-  // 1. MONITORAMENTO DE CONEXÃO ROBUSTO
+  // Helper para salvar fila no disco
+  private saveQueue() {
+    localStorage.setItem('h2_offline_queue', JSON.stringify(this.offlineQueue));
+  }
+
   private handleConnectionState() {
     const connectedRef = ref(database, '.info/connected');
     onValue(connectedRef, (snap) => {
@@ -43,20 +47,16 @@ class DBService {
       } else {
         this.isOnline = false;
       }
-      // Dispara evento para a UI saber se está offline
       window.dispatchEvent(new CustomEvent('connection-change', { detail: { online: this.isOnline } }));
     });
   }
 
-  // 2. PROCESSAMENTO DE FILA OFFLINE (Sincronização)
   private async processOfflineQueue() {
     if (this.offlineQueue.length === 0) return;
 
-    console.log(`[SYNC] Enviando ${this.offlineQueue.length} ações pendentes...`);
-    
-    // Copia e limpa a fila para processar
     const queueToProcess = [...this.offlineQueue];
     this.offlineQueue = []; 
+    this.saveQueue();
 
     for (const task of queueToProcess) {
       try {
@@ -64,26 +64,27 @@ class DBService {
         if (task.method === 'set') await set(dbRef, task.data);
         else await update(dbRef, task.data);
       } catch (e) {
-        console.error("[SYNC FALHOU] Retornando item para a fila:", e);
-        this.offlineQueue.push(task); // Devolve para tentar depois
+        console.error("Erro sync, devolvendo para fila:", e);
+        this.offlineQueue.push(task);
+        this.saveQueue();
       }
     }
   }
 
-  // 3. ESCRITA SEGURA (Wrapper)
   private async safeWrite(path: string, data: any, method: 'set' | 'update' = 'update') {
     if (!this.isOnline) {
       this.offlineQueue.push({ path, data, method });
-      console.warn(`[OFFLINE] Dados salvos localmente: ${path}`);
+      this.saveQueue();
       return;
     }
     try {
       const dbRef = ref(database, path);
+      // No Firebase, setar como null deleta o nó
       if (method === 'set') await set(dbRef, data);
       else await update(dbRef, data);
     } catch (error) {
-      console.error(`Erro ao escrever em ${path}, enfileirando:`, error);
       this.offlineQueue.push({ path, data, method });
+      this.saveQueue();
     }
   }
 
@@ -110,7 +111,13 @@ class DBService {
     window.dispatchEvent(new Event('db-update'));
   }
 
-  // --- MÉTODOS DE NEGÓCIO ---
+  // --- MÉTODOS DE AÇÃO ---
+
+  // NOVO: Método para excluir motorista
+  deleteDriver(driverId: string) {
+      // Passar 'null' para o set remove o registro no Firebase
+      this.safeWrite(`drivers/${driverId}`, null, 'set');
+  }
 
   async login(name: string, role: UserRole): Promise<Driver | { name: string, role: UserRole }> {
     if (role === UserRole.ADMIN) {
@@ -138,7 +145,6 @@ class DBService {
         });
     }
 
-    // PRESENÇA: Se desconectar abruptamente, marca como OFFLINE no servidor
     const presenceRef = ref(database, 'drivers/' + driver.id);
     onDisconnect(presenceRef).update({
         status: 'OFFLINE',
@@ -152,15 +158,12 @@ class DBService {
     const driver = this.drivers.find(d => d.id === driverId);
     if (!driver) return;
 
-    // Mantém status de pausa se estiver ativo
     const status = driver.status === 'ON_BREAK' ? 'ON_BREAK' : 'EN_ROUTE';
     
-    // UI Update Imediato (Otimista)
     driver.currentLocation = coords;
     driver.status = status;
     driver.lastUpdate = Date.now();
 
-    // Server Update (Queueable)
     this.safeWrite('drivers/' + driverId, {
       currentLocation: coords,
       lastUpdate: serverTimestamp(),
@@ -201,7 +204,6 @@ class DBService {
         }
     };
 
-    // Verifica se a rota acabou
     const totalProcessed = currentCompleted.length + (cachedRoute.failedStops?.length || 0);
     if (totalProcessed === cachedRoute.stops.length) {
         updates.status = 'COMPLETED';

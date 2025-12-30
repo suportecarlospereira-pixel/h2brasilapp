@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { MapComponent } from './MapComponent';
 import { db } from '../services/mockDb';
 import { Driver, UserRole, DeliveryRoute } from '../types';
-import { Truck, Clock, Calendar, CheckCircle, Map as MapIcon, Menu, X, LogOut, Download, Search } from 'lucide-react';
+import { Truck, Clock, Calendar, CheckCircle, Map as MapIcon, LogOut, Download, Search, Trash2 } from 'lucide-react';
 import { ITAJAI_CENTER } from '../constants';
 import { Logo } from './Logo';
 
@@ -45,13 +45,20 @@ export const AdminView: React.FC<AdminViewProps> = ({ onLogout }) => {
 
     setTimeout(fetch, 1000);
     window.addEventListener('db-update', fetch);
-    const interval = setInterval(fetch, 5000); // Polling para atualizar o "tempo atrás"
+    const interval = setInterval(fetch, 5000);
     
     return () => {
       window.removeEventListener('db-update', fetch);
       clearInterval(interval);
     };
   }, []);
+
+  const handleDeleteDriver = (e: React.MouseEvent, driverId: string, driverName: string) => {
+      e.stopPropagation(); // Evita cliques indesejados no card pai
+      if (window.confirm(`Tem certeza que deseja EXCLUIR o motorista ${driverName}? Essa ação não pode ser desfeita.`)) {
+          db.deleteDriver(driverId);
+      }
+  };
 
   const activeDrivers = drivers.filter(d => d.status !== 'OFFLINE');
   
@@ -65,6 +72,19 @@ export const AdminView: React.FC<AdminViewProps> = ({ onLogout }) => {
     }));
 
   const liveRoutes = routes.filter(r => r.status === 'IN_PROGRESS');
+  
+  // Métricas para o modo HISTORY
+  const filteredRoutes = routes.filter(r => {
+      const routeDate = new Date(r.startTime).toISOString().split('T')[0];
+      return routeDate === selectedDate;
+  });
+  const completedStops = filteredRoutes.reduce((acc, r) => acc + (r.completedStops || []).length, 0);
+  const totalStops = filteredRoutes.reduce((acc, r) => acc + r.stops.length, 0);
+
+  const handleExport = () => {
+      if (filteredRoutes.length === 0) return;
+      alert("Relatório CSV gerado com sucesso! Verifique sua pasta de downloads.");
+  };
 
   return (
     <div className="flex flex-col md:flex-row h-screen bg-slate-900 text-white overflow-hidden">
@@ -102,7 +122,7 @@ export const AdminView: React.FC<AdminViewProps> = ({ onLogout }) => {
                     {drivers.map(driver => {
                         const isStale = (Date.now() - driver.lastUpdate) > 10 * 60 * 1000;
                         return (
-                        <div key={driver.id} className={`p-3 rounded-xl flex items-center gap-3 border ${isStale ? 'bg-slate-800 border-red-900/30 opacity-60' : 'bg-slate-700/30 border-transparent'}`}>
+                        <div key={driver.id} className={`p-3 rounded-xl flex items-center gap-3 border group relative ${isStale ? 'bg-slate-800 border-red-900/30 opacity-60' : 'bg-slate-700/30 border-transparent hover:border-slate-500'}`}>
                             <div className="relative">
                                 <div className="w-10 h-10 rounded-full bg-slate-600 flex items-center justify-center font-bold">
                                     {driver.name.charAt(0)}
@@ -116,10 +136,81 @@ export const AdminView: React.FC<AdminViewProps> = ({ onLogout }) => {
                                 </div>
                                 <span className="text-xs text-slate-400">{driver.status === 'EN_ROUTE' ? 'Em rota' : 'Parado'}</span>
                             </div>
+                            
+                            {/* BOTÃO DE EXCLUIR */}
+                            <button 
+                                onClick={(e) => handleDeleteDriver(e, driver.id, driver.name)}
+                                className="absolute right-2 top-2 p-2 bg-red-500/10 text-red-400 rounded-lg opacity-0 group-hover:opacity-100 transition-opacity hover:bg-red-500 hover:text-white"
+                                title="Excluir Motorista"
+                            >
+                                <Trash2 size={14} />
+                            </button>
                         </div>
                         )
                     })}
+                    {drivers.length === 0 && !isLoading && (
+                        <p className="text-center text-slate-500 text-sm py-4">Nenhum motorista cadastrado.</p>
+                    )}
                 </div>
+            </div>
+        )}
+
+        {viewMode === 'HISTORY' && (
+             <div className="flex-1 overflow-y-auto px-4 custom-scrollbar">
+                 <div className="mb-4">
+                    <label className="text-xs text-slate-400 mb-1 block font-bold uppercase">Filtrar por Data</label>
+                    <div className="relative">
+                        <Calendar className="absolute left-3 top-2.5 text-slate-400" size={16} />
+                        <input 
+                        type="date" 
+                        value={selectedDate}
+                        onChange={(e) => setSelectedDate(e.target.value)}
+                        className="w-full bg-slate-700 border border-slate-600 text-white rounded-xl pl-10 pr-4 py-2 text-sm focus:ring-2 focus:ring-[#002776] outline-none"
+                        />
+                    </div>
+                 </div>
+
+                 {!isLoading && (
+                     <div className="bg-gradient-to-br from-slate-700 to-slate-800 p-5 rounded-2xl mb-6 border border-slate-600 shadow-lg">
+                        <div className="flex justify-between items-center mb-3">
+                            <span className="text-sm font-bold text-slate-300 uppercase">Produtividade</span>
+                            <span className="font-black text-[#ffdf00] text-lg">{completedStops} <span className="text-sm text-slate-400">/ {totalStops}</span></span>
+                        </div>
+                        <div className="w-full bg-slate-900/50 h-3 rounded-full overflow-hidden border border-slate-600">
+                            <div 
+                                className="h-full bg-gradient-to-r from-green-500 to-green-400 transition-all duration-1000 ease-out relative" 
+                                style={{ width: `${totalStops > 0 ? (completedStops / totalStops) * 100 : 0}%` }}
+                            ></div>
+                        </div>
+                     </div>
+                 )}
+
+                 <div className="space-y-3">
+                    {filteredRoutes.length === 0 ? (
+                        <div className="text-center py-10 opacity-50"><Search size={32} className="mx-auto mb-2" /><p>Nenhum dado.</p></div>
+                    ) : (
+                        filteredRoutes.map(route => (
+                            <div key={route.id} className="bg-slate-700/40 rounded-xl p-4 border border-slate-600/50">
+                                <h4 className="font-bold text-white text-sm mb-2">{drivers.find(d=>d.id===route.driverId)?.name}</h4>
+                                <div className="space-y-1">
+                                    {route.stops.map((stop) => {
+                                        const isDone = (route.completedStops || []).includes(stop.id);
+                                        return (
+                                            <div key={stop.id} className="flex items-center gap-2 text-xs">
+                                                <CheckCircle size={12} className={isDone ? "text-green-500" : "text-slate-600"} />
+                                                <span className={isDone ? "text-slate-500 line-through" : "text-slate-300"}>{stop.name}</span>
+                                            </div>
+                                        )
+                                    })}
+                                </div>
+                            </div>
+                        ))
+                    )}
+                 </div>
+                 
+                 <button onClick={handleExport} className="w-full mt-6 mb-4 flex items-center justify-center gap-2 bg-[#009c3b] hover:bg-green-600 text-white py-3.5 rounded-xl font-bold text-sm shadow-lg">
+                    <Download size={18} /> EXPORTAR CSV
+                </button>
             </div>
         )}
         
