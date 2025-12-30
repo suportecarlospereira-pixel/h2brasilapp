@@ -1,9 +1,9 @@
-
 import { initializeApp } from 'firebase/app';
-import { getDatabase, ref, set, update, onValue, push, child, get } from 'firebase/database';
+import { getDatabase, ref, set, update, onValue, onDisconnect, serverTimestamp } from 'firebase/database';
 import { Driver, DeliveryRoute, LocationPoint, UserRole } from '../types';
 
-// Real Firebase Configuration
+// CONFIGURAÇÃO REAL DO FIREBASE
+// Substitua pelas chaves de produção da H2 Brasil
 const firebaseConfig = {
   apiKey: "AIzaSyB1w2ZU2S9u7WG41DWf9utYwpOUlfAYLvk",
   authDomain: "h2app-70d40.firebaseapp.com",
@@ -15,50 +15,93 @@ const firebaseConfig = {
   measurementId: "G-Q6LL5DJ6K0"
 };
 
-// Initialize Firebase
 const app = initializeApp(firebaseConfig);
 const database = getDatabase(app);
 
 class DBService {
   private drivers: Driver[] = [];
   private routes: DeliveryRoute[] = [];
-  private hasInitializedListeners = false;
+  private offlineQueue: Array<{ path: string; data: any; method: 'set' | 'update' }> = [];
+  private isOnline: boolean = navigator.onLine;
 
   constructor() {
     this.initListeners();
+    this.handleConnectionState();
+    
+    // Listeners nativos do navegador para internet
+    window.addEventListener('online', () => { this.isOnline = true; this.processOfflineQueue(); });
+    window.addEventListener('offline', () => { this.isOnline = false; });
+  }
+
+  // 1. MONITORAMENTO DE CONEXÃO ROBUSTO
+  private handleConnectionState() {
+    const connectedRef = ref(database, '.info/connected');
+    onValue(connectedRef, (snap) => {
+      if (snap.val() === true) {
+        this.isOnline = true;
+        this.processOfflineQueue();
+      } else {
+        this.isOnline = false;
+      }
+      // Dispara evento para a UI saber se está offline
+      window.dispatchEvent(new CustomEvent('connection-change', { detail: { online: this.isOnline } }));
+    });
+  }
+
+  // 2. PROCESSAMENTO DE FILA OFFLINE (Sincronização)
+  private async processOfflineQueue() {
+    if (this.offlineQueue.length === 0) return;
+
+    console.log(`[SYNC] Enviando ${this.offlineQueue.length} ações pendentes...`);
+    
+    // Copia e limpa a fila para processar
+    const queueToProcess = [...this.offlineQueue];
+    this.offlineQueue = []; 
+
+    for (const task of queueToProcess) {
+      try {
+        const dbRef = ref(database, task.path);
+        if (task.method === 'set') await set(dbRef, task.data);
+        else await update(dbRef, task.data);
+      } catch (e) {
+        console.error("[SYNC FALHOU] Retornando item para a fila:", e);
+        this.offlineQueue.push(task); // Devolve para tentar depois
+      }
+    }
+  }
+
+  // 3. ESCRITA SEGURA (Wrapper)
+  private async safeWrite(path: string, data: any, method: 'set' | 'update' = 'update') {
+    if (!this.isOnline) {
+      this.offlineQueue.push({ path, data, method });
+      console.warn(`[OFFLINE] Dados salvos localmente: ${path}`);
+      return;
+    }
+    try {
+      const dbRef = ref(database, path);
+      if (method === 'set') await set(dbRef, data);
+      else await update(dbRef, data);
+    } catch (error) {
+      console.error(`Erro ao escrever em ${path}, enfileirando:`, error);
+      this.offlineQueue.push({ path, data, method });
+    }
   }
 
   private initListeners() {
-    if (this.hasInitializedListeners) return;
-    this.hasInitializedListeners = true;
-
-    // Listen to Drivers
-    const driversRef = ref(database, 'drivers');
-    onValue(driversRef, (snapshot) => {
+    onValue(ref(database, 'drivers'), (snapshot) => {
       const data = snapshot.val();
-      if (data) {
-        this.drivers = Object.values(data);
-      } else {
-        this.drivers = [];
-      }
+      this.drivers = data ? Object.values(data) : [];
       this.notifyUpdate();
     });
 
-    // Listen to Routes
-    const routesRef = ref(database, 'routes');
-    onValue(routesRef, (snapshot) => {
+    onValue(ref(database, 'routes'), (snapshot) => {
       const data = snapshot.val();
-      if (data) {
-        // Safe mapping to ensure arrays exist
-        this.routes = Object.values(data).map((r: any) => ({
+      this.routes = data ? Object.values(data).map((r: any) => ({
             ...r,
             completedStops: r.completedStops || [], 
             failedStops: r.failedStops || [],
             stops: r.stops || []
-        }));
-      } else {
-        this.routes = [];
-      }
+        })) : [];
       this.notifyUpdate();
     });
   }
@@ -67,157 +110,139 @@ class DBService {
     window.dispatchEvent(new Event('db-update'));
   }
 
-  // --- Auth ---
-  login(name: string, role: UserRole): Driver | { name: string, role: UserRole } {
+  // --- MÉTODOS DE NEGÓCIO ---
+
+  async login(name: string, role: UserRole): Promise<Driver | { name: string, role: UserRole }> {
     if (role === UserRole.ADMIN) {
       return { name, role };
     }
     
-    // For drivers, we either find existing or create new one on Firebase
-    let driver = this.drivers.find(d => d.name.toLowerCase() === name.toLowerCase());
+    const normalizedName = name.trim();
+    let driver = this.drivers.find(d => d.name.toLowerCase() === normalizedName.toLowerCase());
     
     if (!driver) {
       const newId = crypto.randomUUID();
       driver = {
         id: newId,
-        name,
+        name: normalizedName,
         role: UserRole.DRIVER,
-        status: 'OFFLINE',
+        status: 'IDLE',
         lastUpdate: Date.now(),
-        avatarUrl: `https://api.dicebear.com/7.x/avataaars/svg?seed=${name}`
+        avatarUrl: `https://api.dicebear.com/7.x/avataaars/svg?seed=${normalizedName}`
       };
-      
-      // Save to Firebase
-      set(ref(database, 'drivers/' + newId), driver);
+      await this.safeWrite('drivers/' + newId, driver, 'set');
     } else {
-        // Ensure status is online if logging in
-        update(ref(database, 'drivers/' + driver.id), {
+        await this.safeWrite('drivers/' + driver.id, {
             status: 'IDLE',
-            lastUpdate: Date.now()
+            lastUpdate: serverTimestamp()
         });
     }
+
+    // PRESENÇA: Se desconectar abruptamente, marca como OFFLINE no servidor
+    const presenceRef = ref(database, 'drivers/' + driver.id);
+    onDisconnect(presenceRef).update({
+        status: 'OFFLINE',
+        lastUpdate: serverTimestamp()
+    });
     
     return driver;
   }
 
-  // --- Driver Actions ---
-  toggleDriverStatus(driverId: string, currentStatus: string) {
-      const newStatus = currentStatus === 'ON_BREAK' ? 'IDLE' : 'ON_BREAK';
-      update(ref(database, 'drivers/' + driverId), {
-          status: newStatus,
-          lastUpdate: Date.now()
-      });
-      return newStatus;
-  }
-
   updateDriverLocation(driverId: string, coords: { lat: number; lng: number }) {
     const driver = this.drivers.find(d => d.id === driverId);
-    // Don't auto-update status if on break
-    const status = driver?.status === 'ON_BREAK' ? 'ON_BREAK' : 'EN_ROUTE';
+    if (!driver) return;
 
-    // Optimistic update
-    const idx = this.drivers.findIndex(d => d.id === driverId);
-    if (idx !== -1) {
-       this.drivers[idx].currentLocation = coords;
-       this.drivers[idx].lastUpdate = Date.now();
-       this.drivers[idx].status = status; 
-    }
+    // Mantém status de pausa se estiver ativo
+    const status = driver.status === 'ON_BREAK' ? 'ON_BREAK' : 'EN_ROUTE';
+    
+    // UI Update Imediato (Otimista)
+    driver.currentLocation = coords;
+    driver.status = status;
+    driver.lastUpdate = Date.now();
 
-    // Firebase Update
-    update(ref(database, 'drivers/' + driverId), {
+    // Server Update (Queueable)
+    this.safeWrite('drivers/' + driverId, {
       currentLocation: coords,
-      lastUpdate: Date.now(),
+      lastUpdate: serverTimestamp(),
       status: status
     });
   }
 
   createRoute(driverId: string, stops: LocationPoint[]): DeliveryRoute {
     const routeId = crypto.randomUUID();
-    
     const newRoute: DeliveryRoute = {
       id: routeId,
       driverId,
-      stops: stops,
+      stops,
       status: 'IN_PROGRESS',
       startTime: Date.now(),
       completedStops: [],
       failedStops: []
     };
     
-    set(ref(database, 'routes/' + routeId), newRoute);
-    
-    update(ref(database, 'drivers/' + driverId), {
-        status: 'EN_ROUTE'
-    });
+    this.safeWrite('routes/' + routeId, newRoute, 'set');
+    this.safeWrite('drivers/' + driverId, { status: 'EN_ROUTE' });
 
     return newRoute;
   }
 
-  reportIssue(routeId: string, stopId: string, issue: string) {
-      const routeRef = ref(database, 'routes/' + routeId);
-      const cachedRoute = this.routes.find(r => r.id === routeId);
+  completeStop(routeId: string, stopId: string, podData?: { receiverName: string; observation: string }) {
+    const cachedRoute = this.routes.find(r => r.id === routeId);
+    if (!cachedRoute) return;
 
-      if (cachedRoute) {
-          const currentFailed = Array.isArray(cachedRoute.failedStops) ? cachedRoute.failedStops : [];
-          
-          if (!currentFailed.includes(stopId)) {
-              const updatedFailed = [...currentFailed, stopId];
-              const updates: any = {
-                  failedStops: updatedFailed
-              };
-              
-              updates[`stopsData/${stopId}`] = {
-                  status: 'FAILED',
-                  issue: issue,
-                  timestamp: Date.now()
-              };
+    const currentCompleted = [...(cachedRoute.completedStops || []), stopId];
+    
+    const updates: any = {
+        completedStops: currentCompleted,
+        [`stopsData/${stopId}`]: {
+            ...podData,
+            status: 'SUCCESS',
+            timestamp: serverTimestamp()
+        }
+    };
 
-              // Check completion (total stops = success + failed)
-              const totalProcessed = (cachedRoute.completedStops?.length || 0) + updatedFailed.length;
-              if (totalProcessed === cachedRoute.stops.length) {
-                  updates.status = 'COMPLETED';
-                  update(ref(database, 'drivers/' + cachedRoute.driverId), { status: 'IDLE' });
-              }
+    // Verifica se a rota acabou
+    const totalProcessed = currentCompleted.length + (cachedRoute.failedStops?.length || 0);
+    if (totalProcessed === cachedRoute.stops.length) {
+        updates.status = 'COMPLETED';
+        updates.endTime = serverTimestamp();
+        this.safeWrite('drivers/' + cachedRoute.driverId, { status: 'IDLE' });
+    }
 
-              update(routeRef, updates);
-          }
-      }
+    this.safeWrite('routes/' + routeId, updates);
   }
 
-  completeStop(routeId: string, stopId: string, podData?: { receiverName: string; observation: string }) {
-    const routeRef = ref(database, 'routes/' + routeId);
-    const cachedRoute = this.routes.find(r => r.id === routeId);
-    
-    if (cachedRoute) {
-        const currentCompleted = Array.isArray(cachedRoute.completedStops) ? cachedRoute.completedStops : [];
-            
-        if (!currentCompleted.includes(stopId)) {
-            const updatedCompleted = [...currentCompleted, stopId];
-            
-            const updates: any = {
-                completedStops: updatedCompleted
-            };
+  reportIssue(routeId: string, stopId: string, issue: string) {
+      const cachedRoute = this.routes.find(r => r.id === routeId);
+      if (!cachedRoute) return;
 
-            if (podData) {
-                updates[`stopsData/${stopId}`] = {
-                    ...podData,
-                    status: 'SUCCESS',
-                    timestamp: Date.now()
-                };
-            }
+      const currentFailed = [...(cachedRoute.failedStops || []), stopId];
+      const updates: any = {
+          failedStops: currentFailed,
+          [`stopsData/${stopId}`]: {
+              status: 'FAILED',
+              issue: issue,
+              timestamp: serverTimestamp()
+          }
+      };
 
-            // Check completion
-            const totalProcessed = updatedCompleted.length + (cachedRoute.failedStops?.length || 0);
-            if (totalProcessed === cachedRoute.stops.length) {
-                updates.status = 'COMPLETED';
-                update(ref(database, 'drivers/' + cachedRoute.driverId), { status: 'IDLE' });
-            }
+      const totalProcessed = (cachedRoute.completedStops?.length || 0) + currentFailed.length;
+      if (totalProcessed === cachedRoute.stops.length) {
+          updates.status = 'COMPLETED';
+          updates.endTime = serverTimestamp();
+          this.safeWrite('drivers/' + cachedRoute.driverId, { status: 'IDLE' });
+      }
 
-            update(routeRef, updates).catch(err => {
-                console.error("Firebase update failed:", err);
-            });
-        }
-    }
+      this.safeWrite('routes/' + routeId, updates);
+  }
+
+  toggleDriverStatus(driverId: string, currentStatus: string) {
+    const newStatus = currentStatus === 'ON_BREAK' ? 'IDLE' : 'ON_BREAK';
+    this.safeWrite('drivers/' + driverId, {
+        status: newStatus,
+        lastUpdate: serverTimestamp()
+    });
+    return newStatus;
   }
 
   getDrivers() { return this.drivers; }
