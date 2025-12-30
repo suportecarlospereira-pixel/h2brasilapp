@@ -19,6 +19,13 @@ export const PREDEFINED_LOCATIONS: LocationPoint[] = [
     address: 'R. José Pereira Liberato, 1889 - São João',
     coords: { lat: -26.902260, lng: -48.683510 }
   },
+  {
+    id: 'codetran',
+    name: 'Codetran Itajaí',
+    type: 'SECRETARIA',
+    address: 'R. Dr. Reinaldo Schmithausen, 2400 - Cordeiros',
+    coords: { lat: -26.890650, lng: -48.685820 }
+  },
 
   // --- UPA (Unidade de Pronto Atendimento) ---
   {
@@ -73,7 +80,7 @@ export const PREDEFINED_LOCATIONS: LocationPoint[] = [
     coords: { lat: -26.922040, lng: -48.655020 }
   },
 
-  // --- UBS (Unidade Básica de Saúde) - ALTA PRECISÃO ---
+  // --- UBS (Unidade Básica de Saúde) ---
   {
     id: 'ubs-fazenda',
     name: 'UBS Fazenda',
@@ -191,7 +198,6 @@ export const PREDEFINED_LOCATIONS: LocationPoint[] = [
     name: 'UBS Murta',
     type: 'UBS',
     address: 'R. Orlandina Amália Pires Corrêa - Murta',
-    // Fixed: Moved slightly south-east to be well within Murta neighborhood, away from Navegantes river border
     coords: { lat: -26.878500, lng: -48.679200 }
   },
   {
