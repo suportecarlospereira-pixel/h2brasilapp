@@ -20,7 +20,6 @@ const calculateDistance = (coord1: Coordinates, coord2: Coordinates) => {
     return R * c;
 };
 
-// Algoritmo de roteirização (Vizinho mais próximo)
 const optimizeRoutePoints = (startCoords: Coordinates, points: LocationPoint[]) => {
     if (points.length === 0) return [];
     let currentPos = startCoords;
@@ -65,7 +64,6 @@ export const DriverView: React.FC<DriverViewProps> = ({ driver, onLogout }) => {
   const [toast, setToast] = useState<{msg: string, type: 'error' | 'success'} | null>(null);
   const [showSuccessModal, setShowSuccessModal] = useState(false);
   
-  // POD States
   const [completingStopId, setCompletingStopId] = useState<string | null>(null);
   const [reportingIssueId, setReportingIssueId] = useState<string | null>(null);
   const [receiverName, setReceiverName] = useState('');
@@ -73,7 +71,6 @@ export const DriverView: React.FC<DriverViewProps> = ({ driver, onLogout }) => {
   const [issueReason, setIssueReason] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
 
-  // GPS
   useEffect(() => {
     if (!('geolocation' in navigator)) return;
     const watchId = navigator.geolocation.watchPosition(
@@ -92,7 +89,6 @@ export const DriverView: React.FC<DriverViewProps> = ({ driver, onLogout }) => {
     return () => navigator.geolocation.clearWatch(watchId);
   }, [driver.id]);
 
-  // Sync de Rota
   useEffect(() => {
     const syncRoute = () => {
         const route = db.getActiveRoute(driver.id);
@@ -133,7 +129,6 @@ export const DriverView: React.FC<DriverViewProps> = ({ driver, onLogout }) => {
     setSelectedPoints(prev => prev.includes(id) ? prev.filter(p => p !== id) : [...prev, id]);
   };
 
-  // Funcao de Pausa / Almoço
   const toggleStatus = () => {
       const newStatus = db.toggleDriverStatus(driver.id, driverStatus);
       setDriverStatus(newStatus as any);
@@ -168,12 +163,10 @@ export const DriverView: React.FC<DriverViewProps> = ({ driver, onLogout }) => {
     e.preventDefault();
     if (!activeRoute || !completingStopId) return;
     
-    // Validação Anti-Fraude Simples (Distância)
     const stop = activeRoute.stops.find(s => s.id === completingStopId);
     if (stop && currentLoc) {
         const distKm = calculateDistance(currentLoc, stop.coords);
-        if (distKm > 0.5) { // 500 metros
-             // Aviso visual, mas nao bloqueia totalmente para nao travar a operação se GPS estiver ruim
+        if (distKm > 0.5) {
              if(!confirm(`Você parece estar a ${distKm.toFixed(1)}km do local. Confirmar mesmo assim?`)) return;
         }
     }
@@ -200,6 +193,7 @@ export const DriverView: React.FC<DriverViewProps> = ({ driver, onLogout }) => {
       showToast("Problema registrado.", "success");
   };
 
+  // --- CORREÇÃO: Função openExternalMap Restaurada ---
   const openExternalMap = (app: 'google' | 'waze') => {
     if (!activeRoute || !currentLoc) return;
     const completed = activeRoute.completedStops || [];
@@ -209,7 +203,14 @@ export const DriverView: React.FC<DriverViewProps> = ({ driver, onLogout }) => {
     
     const query = encodeURIComponent(`${destination.name}, ${destination.address}, Itajaí - SC`);
     const coords = `${destination.coords.lat},${destination.coords.lng}`;
-    const url = app === 'waze' ? `https://waze.com/ul?q=${query}&navigate=yes` : `http://googleusercontent.com/maps.google.com/?q=${query}`;
+    
+    // Links universais robustos
+    let url = '';
+    if (app === 'waze') {
+        url = `https://waze.com/ul?q=${query}&navigate=yes`;
+    } else {
+        url = `https://www.google.com/maps/dir/?api=1&destination=${query}&travelmode=driving`;
+    }
     window.open(url, '_blank');
   };
 
@@ -217,7 +218,7 @@ export const DriverView: React.FC<DriverViewProps> = ({ driver, onLogout }) => {
     <div className="flex flex-col h-screen bg-slate-100 relative overflow-hidden">
       {toast && <Toast message={toast.msg} type={toast.type} onClose={() => setToast(null)} />}
       
-      {/* HEADER */}
+      {/* Header */}
       <div className="absolute top-0 left-0 right-0 z-20 p-4 pointer-events-none">
         <div className="bg-white/90 backdrop-blur-md shadow-lg rounded-2xl p-3 flex justify-between items-center pointer-events-auto border border-white/50">
              <div className="flex items-center gap-2">
@@ -234,7 +235,6 @@ export const DriverView: React.FC<DriverViewProps> = ({ driver, onLogout }) => {
              </div>
              
              <div className="flex items-center gap-2">
-                 {/* BOTÃO DE PAUSA / ALMOÇO */}
                  <button 
                     onClick={toggleStatus}
                     className={`flex items-center gap-1 px-3 py-2 rounded-lg text-xs font-bold shadow-sm transition-all active:scale-95 ${
@@ -259,16 +259,16 @@ export const DriverView: React.FC<DriverViewProps> = ({ driver, onLogout }) => {
         </div>
       </div>
 
-      {/* MAPA: Agora mostra os pontos se não tiver rota ativa */}
+      {/* MAPA: --- CORREÇÃO: Prop 'points' adicionada --- */}
       <div className="absolute inset-0 z-0">
          <MapComponent 
             userLocation={currentLoc} 
             routeStops={activeRoute?.stops} 
-            points={!activeRoute ? PREDEFINED_LOCATIONS : []} // Mostra pontos para escolher se sem rota
+            points={!activeRoute ? PREDEFINED_LOCATIONS : []} 
          />
       </div>
 
-      {/* PAINEL INFERIOR */}
+      {/* Painel Inferior */}
       <div className={`absolute bottom-0 left-0 right-0 bg-white rounded-t-3xl shadow-[0_-10px_40px_rgba(0,0,0,0.2)] z-30 transition-all duration-300 ease-in-out flex flex-col ${isSheetOpen ? 'h-[70vh]' : 'h-[140px]'}`}>
           <div className="w-full h-9 flex items-center justify-center cursor-pointer hover:bg-slate-50 rounded-t-3xl" onClick={() => setIsSheetOpen(!isSheetOpen)}>
               <div className="w-12 h-1.5 bg-slate-300 rounded-full"></div>
@@ -280,7 +280,7 @@ export const DriverView: React.FC<DriverViewProps> = ({ driver, onLogout }) => {
                     {activeRoute ? <PackageCheck size={20} /> : <MapPin size={20} />}
                 </div>
                 <div>
-                    <h2 className="font-black text-[#002776] text-lg leading-tight">{activeRoute ? 'Sua Rota' : 'Escolher Entregas'}</h2>
+                    <h2 className="font-black text-[#002776] text-lg leading-tight">{activeRoute ? 'Rota Atual' : 'Escolher Entregas'}</h2>
                     <p className="text-xs text-slate-400 font-medium">
                         {activeRoute ? `${nextStopIndex + 1}ª parada de ${activeRoute.stops.length}` : 'Selecione os clientes no mapa ou lista'}
                     </p>
@@ -292,7 +292,6 @@ export const DriverView: React.FC<DriverViewProps> = ({ driver, onLogout }) => {
           </div>
 
           <div className="flex-1 overflow-y-auto p-4 space-y-3 bg-slate-50 custom-scrollbar">
-             {/* LISTA DE SELEÇÃO (QUANDO SEM ROTA) */}
              {!activeRoute ? (
                 <>
                   {PREDEFINED_LOCATIONS.map(loc => {
@@ -315,7 +314,6 @@ export const DriverView: React.FC<DriverViewProps> = ({ driver, onLogout }) => {
                   })}
                 </>
              ) : (
-                /* LISTA DA ROTA ATIVA */
                 <div className="space-y-4 pb-20">
                    {activeRoute.stops.map((stop, idx) => {
                      const completedList = activeRoute.completedStops || [];
@@ -367,7 +365,7 @@ export const DriverView: React.FC<DriverViewProps> = ({ driver, onLogout }) => {
           <div className="p-4 bg-white border-t border-slate-200">
              {!activeRoute ? (
                  <button onClick={createRoute} disabled={selectedPoints.length === 0 || loading} className="w-full py-4 bg-[#002776] text-[#ffdf00] rounded-xl font-black shadow-xl hover:shadow-2xl hover:-translate-y-1 disabled:opacity-50 disabled:translate-y-0 disabled:shadow-none flex items-center justify-center gap-2 text-lg transition-all">
-                    {loading ? <Loader className="animate-spin" /> : 'INICIAR ROTA'}
+                    {loading ? <Loader className="animate-spin" /> : 'OTIMIZAR E INICIAR'}
                  </button>
              ) : (
                 <button onClick={() => confirm("Cancelar rota?") && setActiveRoute(undefined)} className="w-full py-3 text-red-500 font-bold text-sm bg-red-50 rounded-xl hover:bg-red-100 transition">
@@ -375,60 +373,59 @@ export const DriverView: React.FC<DriverViewProps> = ({ driver, onLogout }) => {
                 </button>
              )}
           </div>
-      </div>
 
-      {/* MODAIS (Manter iguais ao anterior, apenas para contexto) */}
-      {completingStopId && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4 animate-in fade-in">
-            <div className="bg-white rounded-2xl w-full max-w-sm shadow-2xl overflow-hidden animate-in zoom-in-95">
-                <div className="bg-[#002776] p-4 flex justify-between items-center text-white">
-                    <h3 className="font-bold flex items-center gap-2"><PackageCheck /> Confirmar Entrega</h3>
-                    <button onClick={() => setCompletingStopId(null)}><X size={20} /></button>
+          {completingStopId && (
+            <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4 animate-in fade-in">
+                <div className="bg-white rounded-2xl w-full max-w-sm shadow-2xl overflow-hidden animate-in zoom-in-95">
+                    <div className="bg-[#002776] p-4 flex justify-between items-center text-white">
+                        <h3 className="font-bold flex items-center gap-2"><PackageCheck /> Confirmar Entrega</h3>
+                        <button onClick={() => setCompletingStopId(null)}><X size={20} /></button>
+                    </div>
+                    <form onSubmit={handleConfirmDelivery} className="p-6 space-y-4">
+                        <div>
+                            <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Nome do Recebedor</label>
+                            <input type="text" required value={receiverName} onChange={e => setReceiverName(e.target.value)} placeholder="Quem recebeu?" className="w-full p-3 bg-slate-50 border rounded-xl" />
+                        </div>
+                        <div>
+                            <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Observações</label>
+                            <textarea value={observation} onChange={e => setObservation(e.target.value)} placeholder="Opcional..." className="w-full p-3 bg-slate-50 border rounded-xl h-20 resize-none" />
+                        </div>
+                        <button type="submit" disabled={isSubmitting} className="w-full py-3 bg-[#009c3b] text-white font-bold rounded-xl">{isSubmitting ? 'Salvando...' : 'FINALIZAR ENTREGA'}</button>
+                    </form>
                 </div>
-                <form onSubmit={handleConfirmDelivery} className="p-6 space-y-4">
-                    <div>
-                        <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Nome do Recebedor</label>
-                        <input type="text" required value={receiverName} onChange={e => setReceiverName(e.target.value)} placeholder="Quem recebeu?" className="w-full p-3 bg-slate-50 border rounded-xl" />
-                    </div>
-                    <div>
-                        <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Observações</label>
-                        <textarea value={observation} onChange={e => setObservation(e.target.value)} placeholder="Opcional..." className="w-full p-3 bg-slate-50 border rounded-xl h-20 resize-none" />
-                    </div>
-                    <button type="submit" disabled={isSubmitting} className="w-full py-3 bg-[#009c3b] text-white font-bold rounded-xl">{isSubmitting ? 'Salvando...' : 'FINALIZAR'}</button>
-                </form>
             </div>
-        </div>
-      )}
+          )}
 
-      {reportingIssueId && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4 animate-in fade-in">
-              <div className="bg-white rounded-2xl w-full max-w-sm shadow-2xl overflow-hidden animate-in zoom-in-95">
-                  <div className="bg-red-600 p-4 flex justify-between items-center text-white">
-                      <h3 className="font-bold flex items-center gap-2"><AlertTriangle /> Registrar Problema</h3>
-                      <button onClick={() => setReportingIssueId(null)}><X size={20} /></button>
-                  </div>
-                  <form onSubmit={handleReportIssue} className="p-6 space-y-4">
-                      <div className="grid grid-cols-1 gap-2">
-                          {['Cliente ausente', 'Endereço errado', 'Local fechado', 'Recusado', 'Problema mecânico'].map(r => (
-                              <button key={r} type="button" onClick={() => setIssueReason(r)} className={`p-3 rounded-lg text-sm font-medium border text-left ${issueReason === r ? 'bg-red-50 border-red-500 text-red-700' : 'bg-slate-50 hover:bg-slate-100'}`}>{r}</button>
-                          ))}
+          {reportingIssueId && (
+              <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4 animate-in fade-in">
+                  <div className="bg-white rounded-2xl w-full max-w-sm shadow-2xl overflow-hidden animate-in zoom-in-95">
+                      <div className="bg-red-600 p-4 flex justify-between items-center text-white">
+                          <h3 className="font-bold flex items-center gap-2"><AlertTriangle /> Registrar Problema</h3>
+                          <button onClick={() => setReportingIssueId(null)}><X size={20} /></button>
                       </div>
-                      <button type="submit" disabled={isSubmitting} className="w-full py-3 bg-red-600 text-white font-bold rounded-xl mt-2">CONFIRMAR</button>
-                  </form>
+                      <form onSubmit={handleReportIssue} className="p-6 space-y-4">
+                          <div className="grid grid-cols-1 gap-2">
+                              {['Cliente ausente', 'Endereço errado', 'Local fechado', 'Recusado', 'Problema mecânico'].map(r => (
+                                  <button key={r} type="button" onClick={() => setIssueReason(r)} className={`p-3 rounded-lg text-sm font-medium border text-left ${issueReason === r ? 'bg-red-50 border-red-500 text-red-700' : 'bg-slate-50 hover:bg-slate-100'}`}>{r}</button>
+                              ))}
+                          </div>
+                          <button type="submit" disabled={isSubmitting} className="w-full py-3 bg-red-600 text-white font-bold rounded-xl mt-2">CONFIRMAR</button>
+                      </form>
+                  </div>
               </div>
-          </div>
-      )}
+          )}
 
-      {showSuccessModal && (
-          <div className="fixed inset-0 z-[60] flex items-center justify-center bg-[#002776]/90 backdrop-blur-md p-6">
-              <div className="bg-white rounded-3xl w-full max-w-sm p-8 text-center animate-in zoom-in-95">
-                  <div className="w-20 h-20 bg-yellow-100 rounded-full flex items-center justify-center mx-auto mb-6 text-[#ffdf00]"><Trophy size={40} /></div>
-                  <h2 className="text-2xl font-black text-[#002776] mb-2">ROTA FINALIZADA!</h2>
-                  <p className="text-slate-500 mb-8">Bom trabalho. Descanse ou inicie outra rota.</p>
-                  <button onClick={() => { setActiveRoute(undefined); setShowSuccessModal(false); setIsSheetOpen(true); }} className="w-full py-4 bg-[#002776] text-[#ffdf00] rounded-xl font-black flex items-center justify-center gap-2"><RefreshCw size={20} /> NOVA ROTA</button>
+          {showSuccessModal && (
+              <div className="fixed inset-0 z-[60] flex items-center justify-center bg-[#002776]/90 backdrop-blur-md p-6">
+                  <div className="bg-white rounded-3xl w-full max-w-sm p-8 text-center animate-in zoom-in-95">
+                      <div className="w-20 h-20 bg-yellow-100 rounded-full flex items-center justify-center mx-auto mb-6 text-[#ffdf00]"><Trophy size={40} /></div>
+                      <h2 className="text-2xl font-black text-[#002776] mb-2">ROTA FINALIZADA!</h2>
+                      <p className="text-slate-500 mb-8">Bom trabalho. Descanse ou inicie outra rota.</p>
+                      <button onClick={() => { setActiveRoute(undefined); setShowSuccessModal(false); setIsSheetOpen(true); }} className="w-full py-4 bg-[#002776] text-[#ffdf00] rounded-xl font-black flex items-center justify-center gap-2"><RefreshCw size={20} /> NOVA ROTA</button>
+                  </div>
               </div>
-          </div>
-      )}
+          )}
+      </div>
     </div>
   );
 };
